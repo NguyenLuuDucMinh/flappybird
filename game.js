@@ -1,8 +1,10 @@
 import * as THREE from 'three';
+// import { GLTFLoader } from '...'; // Giữ lại nếu bạn đang dùng model chim .glb
+// Hoặc xóa nếu bạn đang dùng chim tạo từ hình học cơ bản
 
 // --- Khởi tạo cơ bản ---
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87CEEB); // Bầu trời xanh
+scene.background = new THREE.Color(0x87CEEB);
 
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 camera.position.z = 15;
@@ -13,71 +15,124 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
 // --- Ánh sáng ---
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
 scene.add(ambientLight);
-const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
 directionalLight.position.set(5, 10, 7.5);
+directionalLight.castShadow = true;
 scene.add(directionalLight);
 
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
 // --- Các hằng số và biến trò chơi ---
-// Điều chỉnh các giá trị này để cân bằng game tốt hơn với deltaTime
-const gravity = 30; // Tăng giá trị vì giờ nó nhân với deltaTime (thường nhỏ)
-const flapStrength = 8; // Tăng giá trị vì giờ nó được áp dụng tức thời
-const pipeSpeed = 10; // Tăng giá trị vì giờ nó nhân với deltaTime
+const gravity = 30;
+const flapStrength = 8;
+const pipeSpeed = 10;
 
 let birdSpeedY = 0;
-const pipeGap = 4;
-const pipeWidth = 2;
-const pipeSpawnDistance = 30; // Có thể cần điều chỉnh khoảng cách này
+const pipeGap = 4.5;
+const pipeWidth = 2.5;
+const pipeSpawnDistance = 30;
 let lastPipeX = 20;
 let score = 0;
-let gameState = 'start'; // 'start', 'playing', 'gameOver'
+let gameState = 'start'; // Hoặc 'loading' nếu dùng model .glb
 const pipes = [];
 const clock = new THREE.Clock();
 
-// --- Đối tượng Chim ---
-const birdGeometry = new THREE.BoxGeometry(1, 1, 1);
-const birdMaterial = new THREE.MeshStandardMaterial({ color: 0xffff00 });
-const bird = new THREE.Mesh(birdGeometry, birdMaterial);
-bird.position.x = -5;
+// --- Đối tượng Chim (Giữ nguyên code tạo chim của bạn) ---
+function createSimpleBird() {
+    const birdGroup = new THREE.Group();
+    const bodyRadius = 0.5;
+    const bodyGeometry = new THREE.SphereGeometry(bodyRadius, 16, 12);
+    const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xffff00 });
+    const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+    body.castShadow = true;
+    birdGroup.add(body);
+
+    const headRadius = 0.3;
+    const headGeometry = new THREE.SphereGeometry(headRadius, 12, 8);
+    const head = new THREE.Mesh(headGeometry, bodyMaterial);
+    head.position.set(bodyRadius * 0.8, bodyRadius * 0.3, 0);
+    head.castShadow = true;
+    birdGroup.add(head);
+
+    const beakLength = 0.3;
+    const beakRadius = 0.1;
+    const beakGeometry = new THREE.ConeGeometry(beakRadius, beakLength, 8);
+    const beakMaterial = new THREE.MeshStandardMaterial({ color: 0xffa500 });
+    const beak = new THREE.Mesh(beakGeometry, beakMaterial);
+    beak.position.set(head.position.x + headRadius + beakLength * 0.4, head.position.y, 0);
+    beak.rotation.z = -Math.PI / 2;
+    beak.castShadow = true;
+    birdGroup.add(beak);
+
+    const eyeRadius = 0.06;
+    const eyeGeometry = new THREE.SphereGeometry(eyeRadius, 8, 8);
+    const eyeMaterial = new THREE.MeshStandardMaterial({ color: 0x000000 });
+    const eyeRight = new THREE.Mesh(eyeGeometry, eyeMaterial);
+    eyeRight.position.set(head.position.x + headRadius * 0.5, head.position.y + headRadius * 0.2, headRadius * 0.7);
+    birdGroup.add(eyeRight);
+
+    birdGroup.position.set(-5, 1, 0);
+    return birdGroup;
+}
+const bird = createSimpleBird();
 scene.add(bird);
+// --- Hết phần code chim ---
 
 // --- Mặt đất ---
-const groundGeometry = new THREE.PlaneGeometry(100, 10);
-const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513, side: THREE.DoubleSide });
+const groundGeometry = new THREE.PlaneGeometry(100, 20);
+const groundMaterial = new THREE.MeshStandardMaterial({
+    color: 0x964B00,
+    side: THREE.DoubleSide
+});
 const ground = new THREE.Mesh(groundGeometry, groundMaterial);
 ground.rotation.x = -Math.PI / 2;
 ground.position.y = -5;
+ground.receiveShadow = true;
 scene.add(ground);
 
 // --- UI Elements ---
 const scoreElement = document.getElementById('score');
 const gameOverElement = document.getElementById('gameOver');
 
-// --- Hàm Tạo Ống ---
-function createPipePair(xPosition) {
-    const worldHeight = 15; // Chiều cao ước lượng của khu vực chơi game (y từ -5 đến 10)
-    const minY = -3; // Vị trí Y thấp nhất cho tâm khoảng trống
-    const maxY = 5;  // Vị trí Y cao nhất cho tâm khoảng trống
-    const gapCenterY = Math.random() * (maxY - minY) + minY; // Vị trí Y ngẫu nhiên hơn
+// --- Material cho Ống (Màu xanh lá cây đơn giản) ---
+const pipeMaterial = new THREE.MeshStandardMaterial({
+    color: 0x2E8B57, // Màu SeaGreen (Bạn có thể đổi sang mã màu khác, vd: 0x00FF00 cho xanh lá cây sáng)
+    // metalness: 0.1, // Tùy chỉnh nếu muốn
+    // roughness: 0.7  // Tùy chỉnh nếu muốn
+});
 
-    // Ống trên
-    // Chiều cao = (Biên trên của vùng chơi) - (Tâm khoảng trống + nửa khoảng trống)
-    const pipeTopHeight = (worldHeight / 2 + camera.position.y - (ground.position.y+0.5)) - (gapCenterY + pipeGap / 2) ; // Tính chiều cao từ mặt đất giả định lên đỉnh
-     const pipeTopGeometry = new THREE.BoxGeometry(pipeWidth, Math.max(0.1, pipeTopHeight), pipeWidth); // Đảm bảo chiều cao > 0
-    const pipeMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+
+// --- Hàm Tạo Ống (Sử dụng Material màu xanh chung) ---
+function createPipePair(xPosition) {
+    const worldHeight = 15;
+    const minY = -2.5;
+    const maxY = 4.5;
+    const gapCenterY = Math.random() * (maxY - minY) + minY;
+
+    const pipeRadius = pipeWidth / 2;
+    const pipeSegments = 20; // Độ mượt của trụ
+
+    // --- Ống trên ---
+    const pipeTopHeight = (worldHeight / 2 + camera.position.y - (ground.position.y + 0.5)) - (gapCenterY + pipeGap / 2);
+    const pipeTopGeometry = new THREE.CylinderGeometry(pipeRadius, pipeRadius, Math.max(0.1, pipeTopHeight), pipeSegments);
+    // Sử dụng trực tiếp pipeMaterial chung
     const pipeTop = new THREE.Mesh(pipeTopGeometry, pipeMaterial);
-    // Vị trí Y = (Tâm khoảng trống + nửa khoảng trống) + (nửa chiều cao ống trên)
     pipeTop.position.set(xPosition, gapCenterY + pipeGap / 2 + pipeTopHeight / 2, 0);
+    pipeTop.castShadow = true;
+    pipeTop.receiveShadow = true;
     scene.add(pipeTop);
 
-    // Ống dưới
-    // Chiều cao = (Tâm khoảng trống - nửa khoảng trống) - (Biên dưới của vùng chơi = mặt đất)
+    // --- Ống dưới ---
     const pipeBottomHeight = (gapCenterY - pipeGap / 2) - ground.position.y;
-    const pipeBottomGeometry = new THREE.BoxGeometry(pipeWidth, Math.max(0.1, pipeBottomHeight), pipeWidth); // Đảm bảo chiều cao > 0
+    const pipeBottomGeometry = new THREE.CylinderGeometry(pipeRadius, pipeRadius, Math.max(0.1, pipeBottomHeight), pipeSegments);
+    // Sử dụng trực tiếp pipeMaterial chung
     const pipeBottom = new THREE.Mesh(pipeBottomGeometry, pipeMaterial);
-     // Vị trí Y = (Tâm khoảng trống - nửa khoảng trống) - (nửa chiều cao ống dưới)
     pipeBottom.position.set(xPosition, gapCenterY - pipeGap / 2 - pipeBottomHeight / 2, 0);
+    pipeBottom.castShadow = true;
+    pipeBottom.receiveShadow = true;
     scene.add(pipeBottom);
 
     const pipePair = {
@@ -91,29 +146,35 @@ function createPipePair(xPosition) {
 
 // --- Hàm Đặt lại Trò chơi ---
 function resetGame() {
-    bird.position.y = 1; // Vị trí bắt đầu Y
-    birdSpeedY = 0; // Reset vận tốc
+    // Reset chim
+    bird.position.y = 1;
+    bird.position.x = -5;
+    if(bird.rotation) bird.rotation.z = 0;
+    birdSpeedY = 0;
+
+    // Reset điểm, UI
     score = 0;
     scoreElement.innerText = `Score: ${score}`;
     gameOverElement.style.display = 'none';
-    gameOverElement.innerHTML = `GAME OVER!<span>Nhấn Space/Click để chơi lại</span>`; // Đặt lại text GameOver
+    gameOverElement.innerHTML = `GAME OVER!<span>Nhấn Space/Click để chơi lại</span>`;
 
     // Xóa tất cả ống cũ
     pipes.forEach(pair => {
         scene.remove(pair.top);
         scene.remove(pair.bottom);
+        // Chỉ cần giải phóng geometry vì material được dùng chung
         if (pair.top.geometry) pair.top.geometry.dispose();
         if (pair.bottom.geometry) pair.bottom.geometry.dispose();
     });
     pipes.length = 0; // Làm rỗng mảng
 
     // Tạo lại ống ban đầu
-    lastPipeX = 20; // Đặt lại vị trí X của ống đầu tiên
+    lastPipeX = 20;
     createPipePair(lastPipeX);
     createPipePair(lastPipeX + pipeSpawnDistance);
     createPipePair(lastPipeX + 2 * pipeSpawnDistance);
 
-    gameState = 'playing'; // Chuyển trạng thái sang đang chơi
+    gameState = 'playing';
 }
 
 // --- Hàm Cập nhật Điểm ---
@@ -128,148 +189,149 @@ function endGame() {
     gameOverElement.style.display = 'block';
 }
 
-// --- Phát hiện Va chạm (AABB) ---
+// --- Phát hiện Va chạm (Giữ nguyên) ---
 function checkCollisions() {
+    if (!bird) return false;
     const birdBox = new THREE.Box3().setFromObject(bird);
 
-    // Va chạm với mặt đất/trần nhà (giới hạn Y)
-    if (bird.position.y < ground.position.y + 0.5 || bird.position.y > 12) { // +0.5 để chạm đúng "bề mặt" ground
+    if (birdBox.min.y < ground.position.y || birdBox.max.y > 12) {
        return true;
     }
 
-    // Va chạm với ống
+    const pipeRadius = pipeWidth / 2;
     for (const pair of pipes) {
-        // Chỉ kiểm tra va chạm với các ống ở gần chim theo trục X để tối ưu
-        if (pair.top.position.x + pipeWidth / 2 > bird.position.x - 0.5 &&
-            pair.top.position.x - pipeWidth / 2 < bird.position.x + 0.5) {
+        if (birdBox.max.x > pair.top.position.x - pipeRadius &&
+            birdBox.min.x < pair.top.position.x + pipeRadius) {
 
             const topPipeBox = new THREE.Box3().setFromObject(pair.top);
             const bottomPipeBox = new THREE.Box3().setFromObject(pair.bottom);
 
             if (birdBox.intersectsBox(topPipeBox) || birdBox.intersectsBox(bottomPipeBox)) {
-                return true; // Va chạm!
+                return true;
             }
         }
     }
-    return false; // Không va chạm
+    return false;
 }
 
-
-// --- Xử lý Input ---
+// --- Xử lý Input (Giữ nguyên) ---
 function handleInput(event) {
-    // Chỉ xử lý khi không phải đang gõ vào input nào đó (phòng trường hợp có thêm UI)
-    if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA') {
-        return;
-    }
+    if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA') return;
+    if (!bird || (gameState === 'loading' && gameState !== 'start')) return;
 
     if (event.code === 'Space' || event.type === 'mousedown' || event.type === 'touchstart') {
-        event.preventDefault(); // Ngăn hành vi mặc định (cuộn trang, chọn text)
-
+        event.preventDefault();
         if (gameState === 'playing') {
-            birdSpeedY = flapStrength; // Áp dụng lực nhảy (sẽ được dùng trong frame tiếp theo)
+            birdSpeedY = flapStrength;
+            if (bird.rotation) bird.rotation.z = 0.3;
         } else if (gameState === 'gameOver' || gameState === 'start') {
-            resetGame(); // Gọi hàm reset để bắt đầu/chơi lại
+            resetGame();
         }
     }
 }
-
 document.addEventListener('keydown', handleInput);
 document.addEventListener('mousedown', handleInput);
 document.addEventListener('touchstart', handleInput);
 
-
-// --- Vòng lặp Animation ---
+// --- Vòng lặp Animation (Giữ nguyên logic chính) ---
 function animate() {
-    requestAnimationFrame(animate); // Lập lịch cho frame tiếp theo
+    requestAnimationFrame(animate);
+    if (gameState === 'loading' || !bird) {
+        renderer.render(scene, camera);
+        return;
+    }
 
-    const deltaTime = clock.getDelta(); // Lấy thời gian từ frame trước
+    const deltaTime = clock.getDelta();
 
     if (gameState === 'playing') {
-        // --- Cập nhật Vật lý Chim (Sử dụng deltaTime) ---
-        birdSpeedY -= gravity * deltaTime; // Trọng lực theo thời gian
-        bird.position.y += birdSpeedY * deltaTime; // Cập nhật vị trí theo thời gian
+        // Cập nhật chim
+        birdSpeedY -= gravity * deltaTime;
+        bird.position.y += birdSpeedY * deltaTime;
+        if (bird.rotation) {
+            bird.rotation.z = Math.max(-Math.PI / 4, Math.min(Math.PI / 6, birdSpeedY * 0.05));
+        }
 
-        // --- Cập nhật Ống (Sử dụng deltaTime) ---
+        // Cập nhật ống
         const pipesToRemove = [];
-        let newPipeNeeded = false;
-        let furthestPipeX = -Infinity; // Tìm ống xa nhất bên phải
-
+        let furthestPipeX = -Infinity;
         pipes.forEach((pair, index) => {
-            pair.top.position.x -= pipeSpeed * deltaTime; // Di chuyển ống theo thời gian
+            pair.top.position.x -= pipeSpeed * deltaTime;
             pair.bottom.position.x -= pipeSpeed * deltaTime;
 
-            // Cập nhật ống xa nhất
             if (pair.top.position.x > furthestPipeX) {
                 furthestPipeX = pair.top.position.x;
             }
 
-            // Tính điểm
-            if (!pair.scored && pair.top.position.x < bird.position.x - pipeWidth / 2) { // Chim đã vượt qua hoàn toàn ống
+            if (!pair.scored && pair.top.position.x < bird.position.x) {
                 pair.scored = true;
                 updateScore();
             }
 
-            // Kiểm tra ống cần xóa (đi quá xa về bên trái)
-            if (pair.top.position.x < -camera.position.z - pipeWidth) { // Ra khỏi tầm nhìn camera
+            if (pair.top.position.x < -camera.position.z - pipeWidth) {
                 pipesToRemove.push(index);
             }
         });
 
-         // Kiểm tra nếu cần tạo ống mới dựa trên vị trí ống xa nhất
-         // Tạo ống mới khi ống xa nhất còn cách một khoảng `pipeSpawnDistance` so với điểm spawn ban đầu (ví dụ: 20)
-         if (pipes.length === 0 || furthestPipeX < lastPipeX - pipeSpawnDistance + 5) { // +5 để tránh tạo quá sát nhau
-             lastPipeX = furthestPipeX <= -Infinity ? 20 : furthestPipeX + pipeSpawnDistance; // Nếu ko có ống thì bắt đầu ở 20
-             createPipePair(lastPipeX);
+        // Tạo ống mới
+         const spawnTriggerX = 10;
+         if (pipes.length === 0 || furthestPipeX < spawnTriggerX) {
+             let nextPipeX = (furthestPipeX <= -Infinity) ? 20 : furthestPipeX + pipeSpawnDistance;
+             createPipePair(nextPipeX);
          }
 
-
-        // Xóa ống cũ (lặp ngược)
+        // Xóa ống cũ
         for (let i = pipesToRemove.length - 1; i >= 0; i--) {
-            const indexToRemove = pipesToRemove[i];
-            scene.remove(pipes[indexToRemove].top);
-            scene.remove(pipes[indexToRemove].bottom);
-            if (pipes[indexToRemove].top.geometry) pipes[indexToRemove].top.geometry.dispose();
-            if (pipes[indexToRemove].bottom.geometry) pipes[indexToRemove].bottom.geometry.dispose();
-            pipes.splice(indexToRemove, 1);
+             const indexToRemove = pipesToRemove[i];
+             const pairToRemove = pipes[indexToRemove];
+             scene.remove(pairToRemove.top);
+             scene.remove(pairToRemove.bottom);
+             // Chỉ cần giải phóng geometry
+             if (pairToRemove.top.geometry) pairToRemove.top.geometry.dispose();
+             if (pairToRemove.bottom.geometry) pairToRemove.bottom.geometry.dispose();
+             pipes.splice(indexToRemove, 1);
         }
 
-        // --- Kiểm tra Va chạm ---
+        // Kiểm tra va chạm
         if (checkCollisions()) {
             endGame();
         }
 
     } else if (gameState === 'start') {
-         // Hiển thị thông báo bắt đầu
          gameOverElement.innerHTML = `FLAPPY BIRD 3D<span>Nhấn Space/Click để bắt đầu</span>`;
          gameOverElement.style.display = 'block';
-         // Có thể thêm hiệu ứng nhẹ cho chim chờ ở màn hình start
-         bird.position.y = 1 + Math.sin(clock.getElapsedTime() * 5) * 0.1; // Chim nhấp nhô nhẹ
+         bird.position.y = 1 + Math.sin(clock.getElapsedTime() * 5) * 0.1;
+         if(bird.rotation) bird.rotation.z = 0;
+
     } else if (gameState === 'gameOver') {
-        // Có thể thêm hiệu ứng khi game over, ví dụ chim rơi hẳn xuống
-        if (bird.position.y > ground.position.y + 0.5) {
-             birdSpeedY -= gravity * deltaTime * 0.5; // Rơi chậm hơn khi game over
+        const birdBox = new THREE.Box3().setFromObject(bird);
+        const groundLevel = ground.position.y + (birdBox.max.y - birdBox.min.y) / 2;
+         if (bird.position.y > groundLevel) {
+             birdSpeedY -= gravity * deltaTime * 0.8;
              bird.position.y += birdSpeedY * deltaTime;
-        } else {
-            bird.position.y = ground.position.y + 0.5; // Nằm trên mặt đất
-        }
+             if (bird.rotation) bird.rotation.z = Math.max(-Math.PI / 2, bird.rotation.z - deltaTime * 2);
+         } else {
+            bird.position.y = groundLevel;
+            birdSpeedY = 0;
+             if (bird.rotation) bird.rotation.z = -Math.PI / 2;
+         }
     }
 
-    // --- Render Scene ---
     renderer.render(scene, camera);
 }
 
-// --- Xử lý thay đổi kích thước cửa sổ ---
+// --- Xử lý thay đổi kích thước cửa sổ (Giữ nguyên) ---
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// --- Bắt đầu vòng lặp ---
-// Tạo vài ống ban đầu khi bắt đầu
-createPipePair(lastPipeX);
-createPipePair(lastPipeX + pipeSpawnDistance);
-createPipePair(lastPipeX + 2 * pipeSpawnDistance);
-// Khởi tạo vị trí chim ban đầu
-bird.position.y = 1;
-animate(); // Bắt đầu vòng lặp game
+// --- Bắt đầu Game ---
+function startGame() {
+    createPipePair(lastPipeX);
+    createPipePair(lastPipeX + pipeSpawnDistance);
+    createPipePair(lastPipeX + 2 * pipeSpawnDistance);
+    animate();
+}
+
+startGame(); // Gọi trực tiếp nếu không load model
